@@ -1,24 +1,20 @@
-# ImagenI2R : A Diffusion Model for Regular Time Series Generation from Irregular Data with Completion and Masking
+# ImagenI2R
 
-An implementation of time series to image generation using diffusion models, specifically designed for handling irregular time series.
+[![NeurIPS 2025](https://img.shields.io/badge/Conference-NeurIPS%202025-blue)]()
+[![Web App](https://img.shields.io/badge/Web%20App-Live-green)](https://imageni2r.vercel.app/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)]()
+
+## A Diffusion Model for Regular Time Series Generation from Irregular Data
+
+**ImagenI2R** is a framework that generates **regular time series from irregularly-sampled data** by combining a **Time Series Transformer** for completion with a **vision-based diffusion model with masking**. It achieves **state-of-the-art generative performance** while being highly efficient and scalable.
+
+### [Project Website](https://imageni2r.vercel.app/)
+### [Paper](https://arxiv.org/abs/2410.19538)
+![Model Architecture](visuals/model_architecture.png)
 
 ## Overview
 
-This project implements a novel approach for generating synthetic irregular time series data by:
-
-1. **Time Series to Image Transformation**: Converting irregular time series to image representations using delay embedding
-2. **Diffusion Model Training**: Training EDM (Elucidating the Design Space of Diffusion-Based Generative Models) on the image representations
-3. **Time Series Transformer (TST)**: Using transformer-based encoder-decoder for time series reconstruction
-4. **Synthetic Data Generation**: Generating new time series samples through the trained diffusion model
-
-## Features
-
-- **Irregular Time Series Support**: Handles missing data through NaN value propagation
-- **Multiple Datasets**: Support for various time series datasets (electricity, energy, ETT, weather, stock, sine, mujoco)
-- **Flexible Sequence Lengths**: Configurable sequence lengths (24, 96, 768)
-- **Advanced Metrics**: Comprehensive evaluation using discriminative, predictive, FID, and correlation scores
-- **EMA Support**: Exponential Moving Average for improved model stability
-- **Neptune Integration**: Built-in experiment tracking with Neptune
+Generating realistic time series is critical for applications in healthcare, finance, and science, but irregular sampling and missing data make it challenging. ImagenI2R addresses this with a two-step approach: first, a Time Series Transformer (TST) completes irregular sequences, creating natural neighborhoods; second, a vision-based diffusion model with masking generates realistic time series while reducing reliance on imputed values. This combination ensures high-quality synthetic data, natural temporal patterns, and efficient training. ImagenI2R can be used to generate synthetic datasets, impute missing measurements, and benchmark models, achieving state-of-the-art performance with significant improvements in both accuracy and computational efficiency.
 
 ## Installation
 
@@ -27,15 +23,17 @@ This project implements a novel approach for generating synthetic irregular time
 - Python 3.8+
 - CUDA-capable GPU (recommended)
 
-### Dependencies
-
-Install the required packages:
-
+### Setup
+Download and set up the repository:
 ```bash
+git clone https://github.com/azencot-group/ImagenI2R.git
+cd ImagenI2R
+conda create -n ImagenI2R python=3.9
+conda activate ImagenI2R
 pip install -r requirements.txt
 ```
 
-### Data Setup
+### Data 
 
 **Important**: You need to download all datasets from the provided Google Drive link and place them in the `data` folder.
 
@@ -119,30 +117,6 @@ python run_irregular.py \
 - `--learning_rate`: Learning rate for optimization
 - `--neptune`: Enable Neptune logging (requires setup)
 
-## Architecture
-
-### Components
-
-1. **DelayEmbedder** (`models/img_transformations.py`): Converts time series to images using delay embedding
-2. **EDMPrecond** (`models/networks.py`): Diffusion model with EDM preconditioning
-3. **TSTransformerEncoder** (`models/TST.py`): Transformer encoder for time series processing
-4. **TST_Decoder** (`models/decoder.py`): GRU-based decoder for reconstruction
-
-### Training Process
-
-1. **Pre-training Phase**: Train TST encoder-decoder for time series reconstruction
-2. **Diffusion Training**: Train diffusion model on image representations
-3. **Joint Training**: Continue with both reconstruction and diffusion losses
-
-## Evaluation Metrics
-
-The model is evaluated using multiple metrics:
-
-- **Discriminative Score**: How well a classifier can distinguish real vs synthetic data
-- **Predictive Score**: Prediction accuracy on downstream tasks
-- **FID Score**: Fréchet Inception Distance adapted for time series
-- **Correlation Score**: Pearson correlation between real and synthetic data
-
 ## Configuration Files
 
 Configuration files are organized by sequence length:
@@ -194,13 +168,13 @@ To use Neptune logging:
 
 ## Dependencies
 
-- `torch>=2.7.1` - Deep learning framework
-- `numpy>=1.24.3` - Numerical computing
-- `scipy>=1.11.2` - Scientific computing
-- `scikit-learn>=1.3.0` - Machine learning utilities
-- `omegaconf>=2.3.0` - Configuration management
-- `Pillow>=10.0.0` - Image processing
-- `tqdm>=4.66.1` - Progress bars
+- `torch>=2.7.1` 
+- `numpy>=1.24.3` 
+- `scipy>=1.11.2` 
+- `scikit-learn>=1.3.0` 
+- `omegaconf>=2.3.0` 
+- `Pillow>=10.0.0` 
+- `tqdm>=4.66.1` 
 
 ## Project Structure
 
@@ -215,9 +189,7 @@ To use Neptune logging:
 └── requirements.txt  # Python dependencies
 ```
 
-## Citation
-
-If you use this code in your research, please cite:
+## BibTeX
 
 ```bibtex
 @article{ts2img_irregular,
@@ -228,30 +200,3 @@ If you use this code in your research, please cite:
 }
 ```
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Troubleshooting
-
-### Common Issues
-
-1. **CUDA Out of Memory**: Reduce `batch_size` in config files
-2. **Missing Data Files**: Ensure all datasets are downloaded and placed in `data/` folder
-3. **Configuration Errors**: Check YAML syntax and parameter names
-4. **Neptune Issues**: Verify Neptune setup and credentials
-
-### Performance Tips
-
-- Use GPU for training (automatically detected)
-- Enable EMA for more stable results
-- Adjust `logging_iter` for evaluation frequency
-- Use appropriate `missing_rate` for your use case
-
-## Support
-
-For questions and issues, please:
-
-1. Check the troubleshooting section
-2. Review configuration files for examples
-3. Open an issue with detailed error messages and configuration used
