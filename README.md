@@ -192,11 +192,13 @@ To use Neptune logging:
 ## BibTeX
 
 ```bibtex
-@article{ts2img_irregular,
-  title={Time Series to Image Generation for Irregular Data using Diffusion Models},
-  author={Your Name},
-  journal={Your Journal},
-  year={2024}
+@article{{fadlon2025diffusionmodelregulartimeseries,
+  title={A Diffusion Model for Regular Time Series Generation from Irregular Data},
+  author={Fadlon, Gal and Arbiv, Idan and Berman, Nimrod and Azencot, Omri},
+  journal={Advances in Neural Information Processing Systems},
+  volume={TODO},
+  pages={TODO},
+  year={2025}
 }
 ```
 
