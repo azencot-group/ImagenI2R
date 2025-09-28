@@ -1,6 +1,6 @@
-# TS2IMG: Time Series to Image Generation for Irregular Data
+# ImagenI2R : A Diffusion Model for Regular Time Series Generation from Irregular Data with Completion and Masking
 
-A PyTorch implementation of time series to image generation using diffusion models, specifically designed for handling irregular (missing data) time series. This project converts time series data to images using delay embedding and generates synthetic time series through diffusion processes.
+An implementation of time series to image generation using diffusion models, specifically designed for handling irregular time series.
 
 ## Overview
 
