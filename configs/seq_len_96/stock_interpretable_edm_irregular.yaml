@@ -1,0 +1,26 @@
+# training:
+epochs: 1000
+batch_size: 128
+learning_rate: 0.0001
+weight_decay: 0.00001
+
+# data:
+dataset: stock
+seq_len: 96
+missing_rate: 0.3
+
+# model:
+input_channels: 6
+diffusion_steps: 18 # EDM steps
+img_resolution: 16
+n_layer_enc: 3
+n_layer_dec: 6
+d_model: 128
+n_heads: 4
+dropout: 0.1
+ema: true
+ema_warmup: 100
+
+# logging:
+logging_iter: 30
+

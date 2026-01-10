@@ -23,7 +23,7 @@ diffusion_steps: 18
 ema: true
 ema_warmup: 100
 # logging:
-logging_iter: 10
+logging_iter: 50
 # TST:
 input_size: 6
 

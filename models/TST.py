@@ -178,11 +178,12 @@ class TSTransformerEncoder(nn.Module):
 
         self.feat_dim = feat_dim
 
-    def forward(self, X, padding_masks):
+    def forward(self, X, padding_masks, noise_emb=None):
         """
         Args:
             X: (batch_size, seq_length, feat_dim) torch tensor of masked features (input)
             padding_masks: (batch_size, seq_length) boolean tensor, 1 means keep vector at this position, 0 means padding
+            noise_emb: (batch_size, 1, d_model) optional noise embedding shift
         Returns:
             output: (batch_size, seq_length, feat_dim)
         """
@@ -194,6 +195,11 @@ class TSTransformerEncoder(nn.Module):
         inp = masked_X.permute(1, 0, 2)
         inp = self.project_inp(inp) * math.sqrt(
             self.d_model)  # [seq_length, batch_size, d_model] project input vectors to d_model dimensional space
+        
+        if noise_emb is not None:
+            # noise_emb: (B, 1, D) -> (1, B, D)
+            inp = inp + noise_emb.permute(1, 0, 2)
+
         inp = self.pos_enc(inp)  # add positional encoding
         # NOTE: logic for padding masks is reversed to comply with definition in MultiHeadAttention, TransformerEncoderLayer
         output = self.transformer_encoder(inp, src_key_padding_mask=~padding_masks)

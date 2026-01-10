@@ -38,6 +38,23 @@ def propagate_values(tensor):
     tensor = propagate_values_forward(tensor)
     return tensor
 
+def generate_irregular_mask(data_shape, missing_rate, seed=None):
+    """
+    Generate a random mask for irregular/missing data.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+    batch_size, seq_len, num_features = data_shape
+    mask = torch.ones((batch_size, seq_len, num_features), dtype=torch.float64)
+    missing_per_seq = int(seq_len * missing_rate)
+
+    for i in range(batch_size):
+        missing_indices = torch.randperm(seq_len)[:missing_per_seq]
+        mask[i, missing_indices, :] = float('nan')
+
+    return mask
+
+
 def save_checkpoint(args, our_model, our_optimizer, ema_model, encoder, decoder, tst_optimizer, disc_score, pred_score=None, fid_score=None, correlation_score=None):
     """
     Saves the model checkpoint to the specified directory based on args and disc_score.
@@ -126,79 +143,6 @@ def main(args):
         # print model parameters
         print_model_params(logger, model)
 
-        tst_config = {
-            'feat_dim': args.input_size,
-            'max_len': args.seq_len,
-            'd_model': args.hidden_dim,
-            'n_heads': args.n_heads,  # Number of attention heads
-            'num_layers': args.num_layers,  # Number of transformer layers
-            'dim_feedforward': args.dim_feedforward,
-            'dropout': args.dropout,
-            'pos_encoding': args.pos_encoding,  # or 'learnable'
-            'activation': args.activation,
-            'norm': args.norm,
-            'freeze': args.freeze
-        }
-        # Initialize the TST model
-        embedder = TSTransformerEncoder(
-            feat_dim=tst_config['feat_dim'],
-            max_len=tst_config['max_len'],
-            d_model=tst_config['d_model'],
-            n_heads=tst_config['n_heads'],
-            num_layers=tst_config['num_layers'],
-            dim_feedforward=tst_config['dim_feedforward'],
-            dropout=tst_config['dropout'],
-            pos_encoding=tst_config['pos_encoding'],
-            activation=tst_config['activation'],
-            norm=tst_config['norm'],
-            freeze=tst_config['freeze']
-        ).to(args.device)
-
-        decoder = TST_Decoder(
-            inp_dim=args.hidden_dim,
-            hidden_dim=int(args.hidden_dim + (args.input_size - args.hidden_dim) / 2),
-            layers=3,
-            args=args
-        ).to(args.device)
-        optimizer_er = optim.Adam(chain(embedder.parameters(), decoder.parameters()))
-        embedder.train()
-        decoder.train()
-
-        # --- train model ---
-        logging.info(f"Continuing training loop from epoch {init_epoch}.")
-        best_disc_score = float('inf')
-
-        print('logging_iter', args.logging_iter)
-        for step in range(1, args.first_epoch + 1):
-            for i, data in enumerate(train_loader, 1):
-                x = data[0].to(args.device)
-                x = x[:, :, :-1]
-                x = propagate_values(x)
-                padding_masks = ~torch.isnan(x).any(dim=-1)
-                h = embedder(x, padding_masks)
-
-                # Decoder forward pass with time information
-                x_tilde = decoder(h)
-
-                x_no_nan = x[~torch.isnan(x)]
-                x_tilde_no_nan = x_tilde[~torch.isnan(x)]
-                loss_e_t0 = _loss_e_t0(x_tilde_no_nan, x_no_nan)
-                loss_e_0 = _loss_e_0(loss_e_t0)
-                optimizer_er.zero_grad()
-                loss_e_0.backward()
-                optimizer_er.step()
-                torch.cuda.empty_cache()
-
-            print(
-                "step: "
-                + str(step)
-                + "/"
-                + str(args.first_epoch)
-                + ", loss_e: "
-                + str(np.round(np.sqrt(loss_e_t0.item()), 4))
-            )
-
-
         for epoch in range(init_epoch, args.epochs):
             print("Starting epoch %d." % (epoch,))
 
@@ -210,14 +154,19 @@ def main(args):
                 x = data[0].to(args.device)
                 x_ts = x[:, :, :-1]
 
-                x_ts = propagate_values(x_ts)
-                padding_masks = ~torch.isnan(x_ts).any(dim=-1)
                 x_img = model.ts_to_img(x_ts)
                 mask = torch.isnan(x_img).float() * -1 + 1
-                h = embedder(x_ts, padding_masks)
-                x_recon = decoder(h)
-                x_tilde_img = model.ts_to_img(x_recon)
-                loss = model.loss_fn_irregular(x_tilde_img, mask)
+                x_img_without_nan = torch.nan_to_num(x_img, nan=0.0)
+
+                mask_extra = generate_irregular_mask((x_img.shape[0], 24, 6), 0.2)
+                mask_extra_img = model.ts_to_img(mask_extra)
+                mask_extra_img = torch.isnan(mask_extra_img).float() * -1 + 1
+
+                combined_mask = mask * mask_extra_img
+
+                x_extra_corrupted = x_img_without_nan * mask_extra_img
+                
+                loss = model.loss_fn_irregular_ambient_2(x_extra_corrupted, mask, x_img_without_nan, combined_mask)
                 optimizer.zero_grad()
                 if len(loss) == 2:
                     loss, to_log = loss
@@ -229,20 +178,6 @@ def main(args):
                 optimizer.step()
                 model.on_train_batch_end()
 
-                # #############Recovery######################
-                h = embedder(x_ts, padding_masks)
-                x_tilde = decoder(h)
-                x_no_nan = x_ts[~torch.isnan(x_ts)]
-                x_tilde_no_nan = x_tilde[~torch.isnan(x_ts)]
-                loss_e_t0 = _loss_e_t0(x_tilde_no_nan, x_no_nan)
-
-                loss_e_0 = _loss_e_0(loss_e_t0)
-                loss_e = loss_e_0
-                optimizer_er.zero_grad()
-                loss_e.backward()
-                optimizer_er.step()
-                torch.cuda.empty_cache()
-
             # --- evaluation loop ---
             if epoch % args.logging_iter == 0:
                 gen_sig = []
@@ -253,8 +188,12 @@ def main(args):
                         process = DiffusionProcess(args, model.net, model.img_to_ts, model.ts_to_img,
                                                    (args.input_channels, args.img_resolution, args.img_resolution))
                         for data in tqdm(test_loader):
-                            # sample from the model
-                            x_img_sampled = process.sampling(sampling_number=data[0].shape[0])
+                            # sample from the model using irregular ambient diffusion
+                            x_img_sampled = process.sampling_irregular_ambient(
+                                missing_rate=args.missing_rate,
+                                sampling_number=data[0].shape[0]
+                            )
+
                             # --- convert to time series --
                             x_ts = model.img_to_ts(x_img_sampled)
 
@@ -268,22 +207,10 @@ def main(args):
                 for key, value in scores.items():
                     logger.log(f'test/{key}', value, epoch)
 
-                # # --- save checkpoint ---
-                # curr_disc_score = scores['disc_mean']
-                #
-                # # Du tu time consumption, we calculate predictive, fid and correlation only if we have an improvement in the disc score
-                # if curr_disc_score < best_disc_score:
-                #     new_scores = evaluate_model_irregular(real_sig, gen_sig, args, calc_other_metrics=True)
-                #
-                #     pred_score = new_scores['pred_score_mean']
-                #     fid_score = new_scores['fid_score_mean']
-                #     correlation_score = new_scores['correlation_score_mean']
-                #
-                #     best_disc_score = curr_disc_score
-                #     ema_model = model.model_ema if args.ema else None
-                #     save_checkpoint(args=args, our_model=model, our_optimizer=optimizer, ema_model=ema_model, encoder=embedder, decoder=decoder, tst_optimizer=optimizer_er, disc_score=best_disc_score, pred_score=pred_score, fid_score=fid_score, correlation_score=correlation_score)
 
         logging.info("Training is complete")
+
+
 
 
 if __name__ == '__main__':

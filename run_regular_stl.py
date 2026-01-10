@@ -13,7 +13,8 @@ from metrics import evaluate_model_irregular
 from utils.loggers import NeptuneLogger, PrintLogger, CompositeLogger
 from utils.utils import restore_state, create_model_name_and_dir, print_model_params, log_config_and_tags
 from utils.utils_data import gen_dataloader
-from utils.utils_args import parse_args_irregular
+from utils.utils_args import parse_args_irregular, parse_args_regular
+from utils.utils_stl import stl_decompose_batch, reconstruct_from_components, STLComponentStorage
 from models.our import TS2img_Karras
 from models.sampler import DiffusionProcess
 from models.decoder import TST_Decoder
@@ -126,78 +127,9 @@ def main(args):
         # print model parameters
         print_model_params(logger, model)
 
-        tst_config = {
-            'feat_dim': args.input_size,
-            'max_len': args.seq_len,
-            'd_model': args.hidden_dim,
-            'n_heads': args.n_heads,  # Number of attention heads
-            'num_layers': args.num_layers,  # Number of transformer layers
-            'dim_feedforward': args.dim_feedforward,
-            'dropout': args.dropout,
-            'pos_encoding': args.pos_encoding,  # or 'learnable'
-            'activation': args.activation,
-            'norm': args.norm,
-            'freeze': args.freeze
-        }
-        # Initialize the TST model
-        embedder = TSTransformerEncoder(
-            feat_dim=tst_config['feat_dim'],
-            max_len=tst_config['max_len'],
-            d_model=tst_config['d_model'],
-            n_heads=tst_config['n_heads'],
-            num_layers=tst_config['num_layers'],
-            dim_feedforward=tst_config['dim_feedforward'],
-            dropout=tst_config['dropout'],
-            pos_encoding=tst_config['pos_encoding'],
-            activation=tst_config['activation'],
-            norm=tst_config['norm'],
-            freeze=tst_config['freeze']
-        ).to(args.device)
-
-        decoder = TST_Decoder(
-            inp_dim=args.hidden_dim,
-            hidden_dim=int(args.hidden_dim + (args.input_size - args.hidden_dim) / 2),
-            layers=3,
-            args=args
-        ).to(args.device)
-        optimizer_er = optim.Adam(chain(embedder.parameters(), decoder.parameters()))
-        embedder.train()
-        decoder.train()
-
-        # --- train model ---
-        logging.info(f"Continuing training loop from epoch {init_epoch}.")
-        best_disc_score = float('inf')
-
-        print('logging_iter', args.logging_iter)
-        for step in range(1, args.first_epoch + 1):
-            for i, data in enumerate(train_loader, 1):
-                x = data[0].to(args.device)
-                x = x[:, :, :-1]
-                x = propagate_values(x)
-                padding_masks = ~torch.isnan(x).any(dim=-1)
-                h = embedder(x, padding_masks)
-
-                # Decoder forward pass with time information
-                x_tilde = decoder(h)
-
-                x_no_nan = x[~torch.isnan(x)]
-                x_tilde_no_nan = x_tilde[~torch.isnan(x)]
-                loss_e_t0 = _loss_e_t0(x_tilde_no_nan, x_no_nan)
-                loss_e_0 = _loss_e_0(loss_e_t0)
-                optimizer_er.zero_grad()
-                loss_e_0.backward()
-                optimizer_er.step()
-                torch.cuda.empty_cache()
-
-            print(
-                "step: "
-                + str(step)
-                + "/"
-                + str(args.first_epoch)
-                + ", loss_e: "
-                + str(np.round(np.sqrt(loss_e_t0.item()), 4))
-            )
-
+        # Initialize STL component storage
+        stl_storage = STLComponentStorage(device=args.device)
+        logging.info("Initialized STL component storage for trend and seasonality.")
 
         for epoch in range(init_epoch, args.epochs):
             print("Starting epoch %d." % (epoch,))
@@ -208,16 +140,23 @@ def main(args):
             # --- train loop ---
             for i, data in enumerate(train_loader, 1):
                 x = data[0].to(args.device)
-                x_ts = x[:, :, :-1]
+                x_ts = x[:, :, :-1]  # Remove time index column
 
-                x_ts = propagate_values(x_ts)
-                padding_masks = ~torch.isnan(x_ts).any(dim=-1)
-                x_img = model.ts_to_img(x_ts)
-                mask = torch.isnan(x_img).float() * -1 + 1
-                h = embedder(x_ts, padding_masks)
-                x_recon = decoder(h)
-                x_tilde_img = model.ts_to_img(x_recon)
-                loss = model.loss_fn_irregular(x_tilde_img, mask)
+                # === STL DECOMPOSITION ===
+                # Decompose time series into trend, seasonal, and residual components
+                trends, seasonals, residuals = stl_decompose_batch(x_ts, period=None, robust=True)
+                
+                # Store trend and seasonal components for later sampling
+                # Only store during first epoch to avoid duplicates
+                if epoch == init_epoch:
+                    stl_storage.add_batch(trends, seasonals)
+                
+                # === TRAIN ON RESIDUALS ONLY ===
+                # Convert residual component to image representation
+                x_tilde_img = model.ts_to_img(residuals)
+                
+                # Compute loss on residual images
+                loss = model.loss_fn_regular(x_tilde_img)
                 optimizer.zero_grad()
                 if len(loss) == 2:
                     loss, to_log = loss
@@ -229,19 +168,10 @@ def main(args):
                 optimizer.step()
                 model.on_train_batch_end()
 
-                # #############Recovery######################
-                h = embedder(x_ts, padding_masks)
-                x_tilde = decoder(h)
-                x_no_nan = x_ts[~torch.isnan(x_ts)]
-                x_tilde_no_nan = x_tilde[~torch.isnan(x_ts)]
-                loss_e_t0 = _loss_e_t0(x_tilde_no_nan, x_no_nan)
-
-                loss_e_0 = _loss_e_0(loss_e_t0)
-                loss_e = loss_e_0
-                optimizer_er.zero_grad()
-                loss_e.backward()
-                optimizer_er.step()
-                torch.cuda.empty_cache()
+            # Finalize storage after first epoch
+            if epoch == init_epoch and not stl_storage.is_finalized:
+                stl_storage.finalize()
+                logging.info(f"STL storage finalized. Stored {len(stl_storage)} trend/seasonal component pairs.")
 
             # --- evaluation loop ---
             if epoch % args.logging_iter == 0:
@@ -253,12 +183,25 @@ def main(args):
                         process = DiffusionProcess(args, model.net, model.img_to_ts, model.ts_to_img,
                                                    (args.input_channels, args.img_resolution, args.img_resolution))
                         for data in tqdm(test_loader):
-                            # sample from the model
-                            x_img_sampled = process.sampling(sampling_number=data[0].shape[0])
-                            # --- convert to time series --
-                            x_ts = model.img_to_ts(x_img_sampled)
+                            batch_size = data[0].shape[0]
+                            
+                            # === SAMPLE RESIDUALS FROM DIFFUSION MODEL ===
+                            x_img_sampled = process.sampling(sampling_number=batch_size)
+                            
+                            # Convert sampled residual images back to time series
+                            residuals_sampled = model.img_to_ts(x_img_sampled)
+                            
+                            # === RANDOMLY SELECT TREND AND SEASONALITY ===
+                            # Sample random trend and seasonal components from training set
+                            sampled_trends, sampled_seasonals = stl_storage.sample_random(batch_size)
+                            
+                            # === RECONSTRUCT TIME SERIES ===
+                            # Combine: x = trend + seasonal + residual
+                            x_ts_reconstructed = reconstruct_from_components(
+                                sampled_trends, sampled_seasonals, residuals_sampled
+                            )
 
-                            gen_sig.append(x_ts.detach().cpu().numpy())
+                            gen_sig.append(x_ts_reconstructed.detach().cpu().numpy())
                             real_sig.append(data[0].detach().cpu().numpy())
 
                 gen_sig = np.vstack(gen_sig)
@@ -268,27 +211,14 @@ def main(args):
                 for key, value in scores.items():
                     logger.log(f'test/{key}', value, epoch)
 
-                # # --- save checkpoint ---
-                # curr_disc_score = scores['disc_mean']
-                #
-                # # Du tu time consumption, we calculate predictive, fid and correlation only if we have an improvement in the disc score
-                # if curr_disc_score < best_disc_score:
-                #     new_scores = evaluate_model_irregular(real_sig, gen_sig, args, calc_other_metrics=True)
-                #
-                #     pred_score = new_scores['pred_score_mean']
-                #     fid_score = new_scores['fid_score_mean']
-                #     correlation_score = new_scores['correlation_score_mean']
-                #
-                #     best_disc_score = curr_disc_score
-                #     ema_model = model.model_ema if args.ema else None
-                #     save_checkpoint(args=args, our_model=model, our_optimizer=optimizer, ema_model=ema_model, encoder=embedder, decoder=decoder, tst_optimizer=optimizer_er, disc_score=best_disc_score, pred_score=pred_score, fid_score=fid_score, correlation_score=correlation_score)
-
         logging.info("Training is complete")
 
 
 if __name__ == '__main__':
-    args = parse_args_irregular()
+    args = parse_args_regular()
     torch.random.manual_seed(args.seed)
     np.random.default_rng(args.seed)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     main(args)
+
+
