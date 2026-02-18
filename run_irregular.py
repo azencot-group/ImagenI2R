@@ -23,47 +23,19 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 def propagate_values_forward(tensor):
-    """
-    Propagates the last valid observation forward.
-    """
+    # Iterate over the batch and channels
     for b in range(tensor.size(0)):
-        for f in range(tensor.size(2)):
-            sequence = tensor[b, :, f]
-            last_val = None
-            for i in range(sequence.size(0)):
-                if not torch.isnan(sequence[i]):
-                    last_val = sequence[i]
-                elif last_val is not None:
-                    sequence[i] = last_val
+            # Extract the sequence for the current batch and channel
+            sequence = tensor[b]
+            if torch.isnan(sequence).all():
+                if b + 1 < tensor.size(0):
+                    tensor[b] = tensor[b + 1]
+                else:
+                    tensor[b] = tensor[b - 1]
     return tensor
-
-
-def propagate_values_backward(tensor):
-    """
-    Propagates the next valid observation backward.
-    """
-    for b in range(tensor.size(0)):
-        for f in range(tensor.size(2)):
-            sequence = tensor[b, :, f]
-            last_val = None
-            for i in range(sequence.size(0) - 1, -1, -1):
-                if not torch.isnan(sequence[i]):
-                    last_val = sequence[i]
-                elif last_val is not None:
-                    sequence[i] = last_val
-    return tensor
-
 
 def propagate_values(tensor):
-    """
-    Fills NaN values by first propagating forward, then backward.
-    Any remaining NaNs (if a whole sequence is NaN) are filled with 0.
-    """
     tensor = propagate_values_forward(tensor)
-    tensor = propagate_values_backward(tensor)
-    # If any NaNs remain (e.g., if a whole sequence was NaN), fill with 0
-    if torch.isnan(tensor).any():
-        tensor[torch.isnan(tensor)] = 0
     return tensor
 
 def save_checkpoint(args, our_model, our_optimizer, ema_model, encoder, decoder, tst_optimizer, disc_score, pred_score=None, fid_score=None, correlation_score=None):
